@@ -26,25 +26,19 @@ See [docs/part2-app-plan.md](docs/part2-app-plan.md) for the full design notes.
 
 ## First-time setup
 
-The repo intentionally does not commit `gradle-wrapper.jar`. Generate it once:
+The Gradle wrapper ships with the repo, so the first build only needs:
 
-### Option 1 — Android Studio (recommended)
+1. Copy `local.properties.example` to `local.properties` (or let Android Studio
+   write it) and point `sdk.dir` at your Android SDK.
+2. `./gradlew :app:assembleDebug` (CLI) or `File → Open` in Android Studio.
 
-1. `File → Open` and point at this directory.
-2. Android Studio downloads Gradle and writes the wrapper jar automatically.
-3. Sync, then `Build → Make Project`.
-
-### Option 2 — Command line (if you have a system Gradle)
-
-```powershell
-gradle wrapper --gradle-version 8.10.2
-./gradlew assembleDebug
-```
+The wrapper auto-downloads Gradle 8.10.2 on first run — no system Gradle
+needed once the wrapper jar is checked in.
 
 ## Build & run
 
 ```powershell
-# Debug APK
+# Debug APK -> app/build/outputs/apk/debug/app-debug.apk
 ./gradlew :app:assembleDebug
 
 # Install on connected device (USB debugging on)
