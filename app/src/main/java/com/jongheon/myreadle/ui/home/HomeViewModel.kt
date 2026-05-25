@@ -1,5 +1,6 @@
 package com.jongheon.myreadle.ui.home
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -59,8 +60,10 @@ class HomeViewModel(
 
     fun refresh(force: Boolean = true) {
         viewModelScope.launch {
+            Log.d("MyReadle.VM", "refresh(force=$force) start")
             refreshing.value = true
             val result = if (force) repository.forceRefresh() else repository.refreshIfStale()
+            Log.d("MyReadle.VM", "refresh result=$result")
             transientMessage.value = when (result) {
                 is RefreshResult.Failed -> "Couldn't reach GitHub. Showing cached articles."
                 is RefreshResult.SchemaTooNew ->

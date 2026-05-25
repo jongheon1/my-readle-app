@@ -1,5 +1,6 @@
 package com.jongheon.myreadle.data.repository
 
+import android.util.Log
 import com.jongheon.myreadle.data.local.SettingsDataStore
 import com.jongheon.myreadle.data.local.dao.ArticleDao
 import com.jongheon.myreadle.data.local.entity.ArticleEntity
@@ -50,7 +51,9 @@ class ArticleRepository(
     }
 
     suspend fun forceRefresh(): RefreshResult = runCatching {
+        Log.d(TAG, "forceRefresh: start")
         val index = api.fetchIndex()
+        Log.d(TAG, "forceRefresh: index fetched, dates=${index.dates.size}")
         if (index.schemaVersion > GitHubApi.SUPPORTED_SCHEMA_VERSION) {
             return@runCatching RefreshResult.SchemaTooNew(
                 seen = index.schemaVersion,
@@ -62,24 +65,31 @@ class ArticleRepository(
         val remoteDates = index.dates.map { it.date }
         val recent = remoteDates.sortedDescending().take(MAX_DAYS)
         val toFetch = recent.filter { it !in localDates }
+        Log.d(TAG, "forceRefresh: toFetch=$toFetch (local=$localDates)")
 
         val fetched = mutableListOf<String>()
         for (date in toFetch) {
+            Log.d(TAG, "forceRefresh: fetching $date")
             val daily = api.fetchDaily(date)
             if (daily.schemaVersion > GitHubApi.SUPPORTED_SCHEMA_VERSION) continue
             val entities = daily.topics.map { topic ->
                 val article = topic.toDomain(daily.date)
                 article.toEntity(clock())
             }
+            Log.d(TAG, "forceRefresh: $date -> ${entities.size} entities")
             if (entities.isNotEmpty()) dao.upsertAll(entities)
             fetched += date
         }
 
         settings.setLastIndexUpdate(clock())
+        Log.d(TAG, "forceRefresh: done, fetched=$fetched")
 
         if (fetched.isEmpty()) RefreshResult.UpToDate
         else RefreshResult.Updated(fetched)
-    }.getOrElse { RefreshResult.Failed(it) }
+    }.getOrElse {
+        Log.e(TAG, "forceRefresh: FAILED", it)
+        RefreshResult.Failed(it)
+    }
 
     private fun Article.toEntity(now: Long): ArticleEntity {
         val encoded = json.encodeToString(
@@ -107,6 +117,7 @@ class ArticleRepository(
     }
 
     companion object {
+        private const val TAG = "MyReadle.Repo"
         const val ONE_HOUR_MS: Long = 60L * 60L * 1000L
         const val MAX_DAYS = 14
     }
