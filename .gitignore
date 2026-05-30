@@ -23,6 +23,9 @@ keystore.properties
 .DS_Store
 Thumbs.db
 
+# Local screenshots from emulator runs
+screen-*.png
+
 # Logs
 *.log
 hs_err_pid*

@@ -20,8 +20,10 @@ data class TopicDto(
     @SerialName("topic_id") val topicId: String,
     val category: String,
     @SerialName("title_ko") val titleKo: String,
-    @SerialName("source_url") val sourceUrl: String,
-    @SerialName("source_name") val sourceName: String,
+    // source_url / image_url can legitimately be null when the topic was
+    // generated rather than scraped from an article — keep them nullable.
+    @SerialName("source_url") val sourceUrl: String? = null,
+    @SerialName("source_name") val sourceName: String = "",
     @SerialName("image_url") val imageUrl: String? = null,
     val levels: Map<String, LevelContentDto> = emptyMap(),
 )
@@ -54,7 +56,7 @@ fun TopicDto.toDomain(date: String): Article = Article(
     date = date,
     category = category,
     titleKo = titleKo,
-    sourceUrl = sourceUrl,
+    sourceUrl = sourceUrl.orEmpty(),
     sourceName = sourceName,
     imageUrl = imageUrl,
     levels = levels.mapNotNull { (key, content) ->

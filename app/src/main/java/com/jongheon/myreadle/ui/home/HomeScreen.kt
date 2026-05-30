@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -24,14 +25,15 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -46,12 +48,15 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jongheon.myreadle.R
 import com.jongheon.myreadle.domain.model.Article
+import com.jongheon.myreadle.domain.model.AvailableDate
 import com.jongheon.myreadle.domain.model.Level
 import com.jongheon.myreadle.ui.common.categoryIcon
 import com.jongheon.myreadle.ui.common.categoryLabel
 import com.jongheon.myreadle.ui.common.dateSectionLabel
 import com.jongheon.myreadle.ui.common.formatMinutes
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.snapshotFlow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -63,6 +68,7 @@ fun HomeScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
 
     LaunchedEffect(state.message) {
         val msg = state.message ?: return@LaunchedEffect
@@ -70,6 +76,34 @@ fun HomeScreen(
             snackbar.showSnackbar(msg)
             viewModel.consumeMessage()
         }
+    }
+
+    // Fall back to dates derived from cached articles if the index hasn't
+    // loaded yet, so an offline cold-start still shows something.
+    val sections = remember(state.availableDates, state.articlesByDate) {
+        if (state.availableDates.isNotEmpty()) state.availableDates
+        else state.articlesByDate.keys.sortedDescending().map { date ->
+            AvailableDate(
+                date = date,
+                topicCount = state.articlesByDate[date]?.size ?: 0,
+                categories = emptyList(),
+            )
+        }
+    }
+
+    // Trigger lazy loading for any date currently on screen. Repository
+    // dedupes by date and short-circuits if Room already has rows.
+    LaunchedEffect(listState, sections) {
+        snapshotFlow {
+            listState.layoutInfo.visibleItemsInfo
+                .mapNotNull { (it.key as? String)?.takeIf { k -> k.startsWith(KEY_HEADER) } }
+                .map { it.removePrefix(KEY_HEADER) }
+                .toSet()
+        }
+            .distinctUntilChanged()
+            .collect { visibleDates ->
+                visibleDates.forEach { date -> viewModel.onDateVisible(date) }
+            }
     }
 
     Scaffold(
@@ -95,15 +129,23 @@ fun HomeScreen(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
 
-            if (state.articles.isEmpty()) {
-                EmptyState(modifier = Modifier.weight(1f))
-            } else {
-                ArticleList(
-                    articles = state.articles,
-                    level = state.selectedLevel,
-                    onArticleClick = onArticleClick,
-                    modifier = Modifier.weight(1f),
-                )
+            PullToRefreshBox(
+                isRefreshing = state.isRefreshing,
+                onRefresh = viewModel::onPullToRefresh,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                if (sections.isEmpty()) {
+                    EmptyState(showRefreshHint = !state.isRefreshing)
+                } else {
+                    ArticleList(
+                        sections = sections,
+                        articlesByDate = state.articlesByDate,
+                        loadingDates = state.loadingDates,
+                        level = state.selectedLevel,
+                        listState = listState,
+                        onArticleClick = onArticleClick,
+                    )
+                }
             }
         }
     }
@@ -124,7 +166,6 @@ private fun LevelTabs(
                 selected = level == selected,
                 onClick = { onSelect(level) },
                 label = { Text(level.displayName) },
-                colors = FilterChipDefaults.filterChipColors(),
             )
         }
     }
@@ -132,37 +173,56 @@ private fun LevelTabs(
 
 @Composable
 private fun ArticleList(
-    articles: List<Article>,
+    sections: List<AvailableDate>,
+    articlesByDate: Map<String, List<Article>>,
+    loadingDates: Set<String>,
     level: Level,
+    listState: androidx.compose.foundation.lazy.LazyListState,
     onArticleClick: (String) -> Unit,
-    modifier: Modifier = Modifier,
 ) {
-    val grouped = remember(articles) {
-        articles.groupBy { it.date }.toSortedMap(compareByDescending { it })
-    }
-
     LazyColumn(
-        modifier = modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize(),
+        state = listState,
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        grouped.forEach { (date, articlesForDate) ->
-            item(key = "section-$date") {
+        sections.forEach { dateEntry ->
+            item(key = "$KEY_HEADER${dateEntry.date}", contentType = "section-header") {
                 Text(
-                    text = dateSectionLabel(date),
+                    text = dateSectionLabel(dateEntry.date),
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 4.dp),
+                    modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
                 )
             }
-            items(articlesForDate, key = { it.topicId }) { article ->
-                ArticleCard(
-                    article = article,
-                    level = level,
-                    onClick = { onArticleClick(article.topicId) },
-                )
+
+            val articles = articlesByDate[dateEntry.date].orEmpty()
+            when {
+                articles.isNotEmpty() -> {
+                    items(
+                        items = articles,
+                        key = { it.topicId },
+                        contentType = { "article" },
+                    ) { article ->
+                        ArticleCard(
+                            article = article,
+                            level = level,
+                            onClick = { onArticleClick(article.topicId) },
+                        )
+                    }
+                }
+
+                dateEntry.date in loadingDates || articles.isEmpty() -> {
+                    val placeholderCount = dateEntry.topicCount.coerceAtLeast(1).coerceAtMost(4)
+                    items(
+                        count = placeholderCount,
+                        key = { "skeleton-${dateEntry.date}-$it" },
+                        contentType = { "skeleton" },
+                    ) {
+                        SkeletonCard()
+                    }
+                }
             }
-            item(key = "spacer-$date") { Spacer(Modifier.height(4.dp)) }
         }
     }
 }
@@ -231,13 +291,58 @@ private fun ArticleCard(
 }
 
 @Composable
-private fun EmptyState(modifier: Modifier = Modifier) {
-    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(
-            text = stringResource(R.string.empty_articles),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(32.dp),
-        )
+private fun SkeletonCard() {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            SkeletonLine(widthFraction = 0.35f)
+            Spacer(Modifier.height(10.dp))
+            SkeletonLine(widthFraction = 0.85f, heightDp = 18)
+            Spacer(Modifier.height(8.dp))
+            SkeletonLine(widthFraction = 0.55f, heightDp = 18)
+            Spacer(Modifier.height(12.dp))
+            SkeletonLine(widthFraction = 0.3f)
+        }
     }
 }
+
+@Composable
+private fun SkeletonLine(widthFraction: Float, heightDp: Int = 12) {
+    val onVariant = MaterialTheme.colorScheme.onSurfaceVariant
+    Box(
+        modifier = Modifier
+            .fillMaxWidth(widthFraction)
+            .height(heightDp.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(onVariant.copy(alpha = 0.12f))
+    )
+}
+
+@Composable
+private fun EmptyState(showRefreshHint: Boolean) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(32.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.empty_articles),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (showRefreshHint) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "Pull down to retry.",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+        }
+    }
+}
+
+private const val KEY_HEADER = "header-"

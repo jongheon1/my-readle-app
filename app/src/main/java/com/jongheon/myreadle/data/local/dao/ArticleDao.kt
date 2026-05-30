@@ -16,6 +16,12 @@ interface ArticleDao {
     @Query("SELECT DISTINCT date FROM articles")
     suspend fun allDates(): List<String>
 
+    @Query("SELECT * FROM articles WHERE date = :date ORDER BY topicId ASC")
+    fun observeByDate(date: String): Flow<List<ArticleEntity>>
+
+    @Query("SELECT COUNT(*) FROM articles WHERE date = :date")
+    suspend fun countForDate(date: String): Int
+
     @Query("SELECT * FROM articles WHERE topicId = :topicId LIMIT 1")
     suspend fun byId(topicId: String): ArticleEntity?
 
